@@ -1,4 +1,5 @@
 #include <math.h>
+
 /***************************************************************************
 *                                                                          *
 * This is the source file for a ray tracer. It defines most of the		   *
@@ -157,6 +158,9 @@ int Raytracer::Cast( const Ray &ray, const Scene &scene, HitInfo &hitinfo, Objec
 
 Color Raytracer::Shade( const HitInfo &hit, const Scene &scene, int max_tree_depth )
 {
+	Color direct;
+	Color indirect;
+	Color final;
 	//testear si el objeto es emisor o no, si es emisor devolver color del objeto directamente al pixel
 
 	if (hit.material.Emitter()) {
@@ -181,29 +185,96 @@ Color Raytracer::Shade( const HitInfo &hit, const Scene &scene, int max_tree_dep
 			ray.direction = Unit(s.P - hit.geom.point); //Unit() == normalizar
 			ray.origin = hit.geom.point + (hit.geom.normal * Epsilon);
 
-			//calcular sombra aquí
+			HitInfo hitI;
+			hitI.geom.distance = Length(s.P - hit.geom.point);
 
-			//vector para calcular luz directa
-			Vec3 N = hit.geom.normal;
-			Vec3 L = ray.direction;
-			Vec3 V = Unit(hit.geom.origin - ray.origin);
-			Vec3 R = Unit(Reflection(-L, N));
+			if (!Cast(ray, scene, hitI, obj)){
+				//vector para calcular luz directa
+				Vec3 N = hit.geom.normal;
+				Vec3 L = ray.direction;
+				Vec3 V = Unit(hit.geom.origin - ray.origin);
+				Vec3 R = Unit(Reflection(-L, N));
 
-			//calcular NdotL & RdotV
-			//usando hit.material ..... diffuse y specular
+				//calcular NdotL & RdotV
+				float NdotL = N * L;
+				float RdotV = R * V;
 
-			Color irradiance = s.w * obj->material.m_Emission; //Energia de la luz
+				Color irradiance = s.w * obj->material.m_Emission; //Energia de la luz
 
-			//Color directo = (diffuse + specular) * irradiancia
+				//usando hit.material ..... diffuse y specular
+
+				Color spec;
+				Color diff;
+
+				if (NdotL > 0) {
+					diff = hit.material.m_Diffuse * NdotL;
+				}
+
+				if (hit.material.m_Phong_exp >= 1 && (R * V) > 0) {
+					
+					spec = hit.material.m_Specular * pow(RdotV, hit.material.m_Phong_exp);
+
+				}
+
+				direct = (spec + diff) * irradiance;
+				
+				//Color directo = (diffuse + specular) * irradiancia
+			}
+
 		}
-
-		//Color indirecto
 
 	}
 
-	//Calcular iluminacion indirecta
+	//Color indirecto
+	Ray raySpec;
 
-	return hit.material.m_Diffuse;
+	raySpec.direction = Unit(hit.geom.point - hit.geom.origin); //Unit() == normalizar
+	raySpec.origin = hit.geom.point + (hit.geom.normal * Epsilon);
+	raySpec.no_emitters = true;
+
+	Sample indDiff;
+	indDiff = SampleProjectedHemisphere(hit.geom.normal);
+
+	Ray iDiffRay;
+	iDiffRay.direction = indDiff.P;
+	iDiffRay.origin = hit.geom.point + (hit.geom.normal * Epsilon);
+	iDiffRay.no_emitters = true;
+
+	Color indirect_diff = indDiff.w * hit.material.m_Diffuse / Pi * Trace(iDiffRay, scene, max_tree_depth);	
+
+	Ray iSpecRay;
+	iSpecRay.origin = hit.geom.point + (hit.geom.normal * Epsilon);
+	iSpecRay.no_emitters = true;
+
+	Vec3 R = Unit(Reflection(raySpec.direction, hit.geom.normal));
+	Sample refLobe = SampleSpecularLobe(R, hit.material.m_Phong_exp);
+	iSpecRay.direction = refLobe.P;
+
+	Color indirect_spec;
+
+	Color specTrace = Trace(iSpecRay, scene, max_tree_depth);
+
+	if (hit.material.m_Phong_exp > 0) {
+
+		float spec_normalisation = (hit.material.m_Phong_exp + 2) / TwoPi;
+
+		indirect_spec = refLobe.w * hit.material.m_Specular * spec_normalisation * specTrace;
+
+		indirect = indirect_diff + indirect_spec;
+	}
+	else {
+		indirect = indirect_diff;
+	}	
+
+	final = direct + indirect;
+
+	/*
+	Color m_a = hit.material.m_Diffuse;
+	Color i_s = scene.ambient;
+	final = final + (m_a * i_s);
+	*/
+	
+	return final;
 }
 
 // Returns a sample into the projected hemisphere. It is a type of importance sampling,
